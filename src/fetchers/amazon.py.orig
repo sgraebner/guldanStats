@@ -45,15 +45,19 @@ def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
     key_sales = f"amazon_{name}_umsatz_brutto_eur"
     key_returns = f"amazon_{name}_retouren_eur"
 
-    out = {key_sales: "N/A", key_returns: "N/A"}
+    out: dict[str, float | str] = {key_sales: "N/A", key_returns: "N/A"}
 
     # Sales via Orders API (OrderTotal)
     try:
-        orders_client = _orders_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
+        orders_client = _orders_client(
+            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
+        )
         total_sales = 0.0
         token = None
         while True:
-            resp = orders_client.get_orders(CreatedAfter=start, CreatedBefore=end, NextToken=token)
+            resp = orders_client.get_orders(
+                CreatedAfter=start, CreatedBefore=end, NextToken=token
+            )
             for o in resp.payload.get("Orders", []):
                 t = o.get("OrderTotal") or {}
                 if t.get("CurrencyCode") == "EUR":
@@ -62,12 +66,14 @@ def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
             if not token:
                 break
         out[key_sales] = round(total_sales, 2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.exception("Amazon Orders fetch failed for %s: %s", name, e)
 
     # Returns via Finances Refund Events (yesterday)
     try:
-        finances_client = _finances_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
+        finances_client = _finances_client(
+            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
+        )
         total_refunds = 0.0
         token = None
         while True:
@@ -79,13 +85,14 @@ def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
             for e in refund_events:
                 charge = e.get("RefundChargeList") or []
                 for c in charge:
-                    if c.get("ChargeAmount", {}).get("CurrencyCode") == "EUR":
-                        total_refunds += float(c.get("ChargeAmount", {}).get("CurrencyAmount") or 0.0)
+                    amount = c.get("ChargeAmount", {})
+                    if amount.get("CurrencyCode") == "EUR":
+                        total_refunds += float(amount.get("CurrencyAmount") or 0.0)
             token = resp.payload.get("NextToken")
             if not token:
                 break
         out[key_returns] = round(abs(total_refunds), 2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.exception("Amazon Finances fetch failed for %s: %s", name, e)
 
-    return out
+    return out  # type: ignore[return-value]

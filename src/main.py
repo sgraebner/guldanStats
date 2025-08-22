@@ -123,8 +123,8 @@ def job_run():
     try:
         import time
         time.tzset()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("tzset not available or failed: %s", e)
 
     sh, ws = get_sheet(settings.GOOGLE_SPREADSHEET_ID, settings.GOOGLE_SHEET_TAB, settings.GOOGLE_SERVICE_ACCOUNT_JSON, settings.GOOGLE_SERVICE_ACCOUNT_FILE)
     # Determine date(s) to process: backfill if missing
@@ -164,15 +164,14 @@ def job_run():
                 val = float(v)
             except:
                 val = None
-            hist = compute_history(ws, headers, k)[:-1]  # exclude the just-written value (we'll use prior history)
+            # exclude the just-written value (we'll use prior history)
+            hist = compute_history(ws, headers, k)[:-1]
             flag, norm = classify(val, [x for x in hist])
             if flag != "none" and norm is not None:
                 col_idx = headers.index(k) + 1
                 # Color the cell now
                 if flag == "green":
                     # green
-                    from gspread_formatting import Color
-                    from .sheets import color_cell
                     color_cell(ws, row_index, col_idx, (0.8, 0.94, 0.8))
                 elif flag == "red":
                     color_cell(ws, row_index, col_idx, (0.98, 0.8, 0.8))
@@ -182,7 +181,12 @@ def job_run():
         note_text = ""
         if flagged:
             try:
-                note_text = write_notes(settings.OPENAI_API_KEY, settings.OPENAI_MODEL, date_str, flagged)
+                note_text = write_notes(
+                    settings.OPENAI_API_KEY,
+                    settings.OPENAI_MODEL,
+                    date_str,
+                    flagged,
+                )
                 ws.update_cell(row_index, headers.index("notizen")+1, note_text)
             except Exception as e:
                 log.exception("OpenAI notes failed: %s", e)
@@ -200,11 +204,15 @@ def job_run():
                     body_lines.append(note)
             if body_lines:
                 send_email(
-                    smtp_host=settings.SMTP_HOST, smtp_port=settings.SMTP_PORT,
-                    smtp_user=settings.SMTP_USER, smtp_password=settings.SMTP_PASSWORD, use_tls=settings.SMTP_USE_TLS,
-                    from_addr=settings.ALERT_EMAIL_FROM, to_addr=settings.ALERT_EMAIL_TO,
+                    smtp_host=settings.SMTP_HOST,
+                    smtp_port=settings.SMTP_PORT,
+                    smtp_user=settings.SMTP_USER,
+                    smtp_password=settings.SMTP_PASSWORD,
+                    use_tls=settings.SMTP_USE_TLS,
+                    from_addr=settings.ALERT_EMAIL_FROM,
+                    to_addr=settings.ALERT_EMAIL_TO,
                     subject="KPI-Harvester: Auffälligkeiten erkannt",
-                    body="\n".join(body_lines)
+                    body="\n".join(body_lines),
                 )
         except Exception as e:
             log.exception("Email alert failed: %s", e)
@@ -216,14 +224,19 @@ def run_forever():
     try:
         import time
         time.tzset()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("tzset not available or failed: %s", e)
 
     scheduler = BackgroundScheduler(timezone=settings.TZ)
     trigger = CronTrigger(hour=settings.RUN_HOUR, minute=settings.RUN_MINUTE)
     scheduler.add_job(job_run, trigger)
     scheduler.start()
-    log.info("KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s", settings.RUN_HOUR, settings.RUN_MINUTE, settings.TZ)
+    log.info(
+        "KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s",
+        settings.RUN_HOUR,
+        settings.RUN_MINUTE,
+        settings.TZ,
+    )
     try:
         while True:
             time.sleep(3600)

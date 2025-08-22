@@ -1,7 +1,7 @@
-
 from __future__ import annotations
+
 import datetime as dt
-from typing import Dict, List
+
 from google.ads.googleads.client import GoogleAdsClient
 
 GA_QUERY = '''
@@ -12,6 +12,7 @@ SELECT
 FROM customer
 WHERE segments.date BETWEEN '%(start)s' AND '%(end)s'
 '''
+
 
 def _client(dev_token, client_id, client_secret, refresh_token):
     config = {
@@ -24,9 +25,16 @@ def _client(dev_token, client_id, client_secret, refresh_token):
     }
     return GoogleAdsClient.load_from_dict(config)
 
-def fetch_google_ads_daily(dev_token: str, client_id: str, client_secret: str, refresh_token: str,
-                           customer_ids: List[str], date: dt.date) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+
+def fetch_google_ads_daily(
+    dev_token: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    customer_ids: list[str],
+    date: dt.date,
+) -> dict[str, float]:
+    out: dict[str, float | str] = {}
     if not dev_token or not client_id or not client_secret or not refresh_token or not customer_ids:
         return out
     client = _client(dev_token, client_id, client_secret, refresh_token)
