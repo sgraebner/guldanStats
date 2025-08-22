@@ -1,0 +1,861 @@
+--- a/src/anomaly.py
++++ b/src/anomaly.py
+@@ -1,17 +1,17 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+-import pandas as pd
+
+ import numpy as np
+
+-from typing import Dict, List, Tuple, Optional
+
+ 
+
+-def compute_norm(values: List[float]) -> Optional[float]:
+
++
+
++def compute_norm(values: list[float]) -> float | None:
+
+     arr = np.array([v for v in values if v is not None])
+
+     arr = arr[~np.isnan(arr)]
+
+     if len(arr) < 14:
+
+         return None
+
+     return float(np.median(arr))
+
+ 
+
+-def classify(value: Optional[float], history: List[float]) -> Tuple[str, Optional[float]]:
+
++
+
++def classify(value: float | None, history: list[float]) -> tuple[str, float | None]:
+
+     """Return ('green'|'red'|'none', norm) according to ±35% around median norm."""
+
+     if value is None or (isinstance(value, float) and np.isnan(value)):
+
+         return ("none", None)
+
+--- a/src/config.py
++++ b/src/config.py
+@@ -1,15 +1,18 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+-import json, os
+
++import json
+
++from typing import Any
+
++
+
++from pydantic import Field, field_validator
+
+ from pydantic_settings import BaseSettings
+
+-from pydantic import Field, field_validator
+
+-from typing import List, Optional, Any
+
++
+
+ 
+
+ class ShopwareInstance(BaseSettings):
+
+     name: str
+
+     base_url: str
+
+     client_id: str
+
+     client_secret: str
+
++
+
+ 
+
+ class AmazonAccount(BaseSettings):
+
+     name: str
+
+@@ -20,6 +23,7 @@
+     refresh_token: str
+
+     role_arn: str
+
+ 
+
++
+
+ class EbayAccount(BaseSettings):
+
+     name: str
+
+     environment: str  # 'production' or 'sandbox'
+
+@@ -27,6 +31,7 @@
+     cert_id: str
+
+     redirect_uri: str
+
+     refresh_token: str
+
++
+
+ 
+
+ class Settings(BaseSettings):
+
+     ENV: str = "production"
+
+@@ -38,32 +43,32 @@
+ 
+
+     GOOGLE_SPREADSHEET_ID: str
+
+     GOOGLE_SHEET_TAB: str = "Tägliche Kennzahlen"
+
+-    GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+
+-    GOOGLE_SERVICE_ACCOUNT_FILE: Optional[str] = None
+
++    GOOGLE_SERVICE_ACCOUNT_JSON: str | None = None
+
++    GOOGLE_SERVICE_ACCOUNT_FILE: str | None = None
+
+ 
+
+     OPENAI_API_KEY: str
+
+     OPENAI_MODEL: str = "gpt-5-nano"
+
+ 
+
+-    ALERT_EMAIL_TO: Optional[str] = None
+
+-    ALERT_EMAIL_FROM: Optional[str] = None
+
+-    SMTP_HOST: Optional[str] = None
+
++    ALERT_EMAIL_TO: str | None = None
+
++    ALERT_EMAIL_FROM: str | None = None
+
++    SMTP_HOST: str | None = None
+
+     SMTP_PORT: int = 587
+
+-    SMTP_USER: Optional[str] = None
+
+-    SMTP_PASSWORD: Optional[str] = None
+
++    SMTP_USER: str | None = None
+
++    SMTP_PASSWORD: str | None = None
+
+     SMTP_USE_TLS: bool = True
+
+ 
+
+-    SHOPWARE6_INSTANCES: List[ShopwareInstance] = Field(default_factory=list)
+
+-    GETMYINVOICES_API_KEY: Optional[str] = None
+
++    SHOPWARE6_INSTANCES: list[ShopwareInstance] = Field(default_factory=list)
+
++    GETMYINVOICES_API_KEY: str | None = None
+
+ 
+
+-    GOOGLE_ADS_DEVELOPER_TOKEN: Optional[str] = None
+
+-    GOOGLE_ADS_CLIENT_ID: Optional[str] = None
+
+-    GOOGLE_ADS_CLIENT_SECRET: Optional[str] = None
+
+-    GOOGLE_ADS_REFRESH_TOKEN: Optional[str] = None
+
+-    GOOGLE_ADS_CUSTOMER_IDS: Optional[str] = None  # comma list
+
++    GOOGLE_ADS_DEVELOPER_TOKEN: str | None = None
+
++    GOOGLE_ADS_CLIENT_ID: str | None = None
+
++    GOOGLE_ADS_CLIENT_SECRET: str | None = None
+
++    GOOGLE_ADS_REFRESH_TOKEN: str | None = None
+
++    GOOGLE_ADS_CUSTOMER_IDS: str | None = None  # comma list
+
+ 
+
+-    AMAZON_ACCOUNTS: List[AmazonAccount] = Field(default_factory=list)
+
++    AMAZON_ACCOUNTS: list[AmazonAccount] = Field(default_factory=list)
+
+ 
+
+-    EBAY_ACCOUNTS: List[EbayAccount] = Field(default_factory=list)
+
++    EBAY_ACCOUNTS: list[EbayAccount] = Field(default_factory=list)
+
+ 
+
+     @field_validator("SHOPWARE6_INSTANCES", mode="before")
+
+     @classmethod
+
+--- a/src/fetchers/amazon.py
++++ b/src/fetchers/amazon.py
+@@ -1,38 +1,56 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+ import datetime as dt
+
+-from typing import Dict, List
+
+-from sp_api.api import Orders, Finances
+
+-from sp_api.base import Marketplaces, SellingApiException
+
+-from tenacity import retry, stop_after_attempt, wait_exponential
+
++import logging
+
++
+
++from sp_api.api import Finances, Orders
+
++from sp_api.base import Marketplaces
+
+ 
+
+ REGION_TO_MARKETPLACE = {
+
+     "eu": Marketplaces.DE,
+
+     "na": Marketplaces.US,
+
+-    "fe": Marketplaces.AU
+
++    "fe": Marketplaces.AU,
+
+ }
+
+ 
+
+-def _orders_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
+
++
+
++def _orders_client(
+
++    region: str,
+
++    refresh_token: str,
+
++    lwa_client_id: str,
+
++    lwa_client_secret: str,
+
++    role_arn: str,
+
++):
+
+     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
+
+     return Orders(
+
+         refresh_token=refresh_token,
+
+         lwa_app_id=lwa_client_id,
+
+         lwa_client_secret=lwa_client_secret,
+
+         role_arn=role_arn,
+
+-        marketplace=mp
+
++        marketplace=mp,
+
+     )
+
+ 
+
+-def _finances_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
+
++
+
++def _finances_client(
+
++    region: str,
+
++    refresh_token: str,
+
++    lwa_client_id: str,
+
++    lwa_client_secret: str,
+
++    role_arn: str,
+
++):
+
+     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
+
+     return Finances(
+
+         refresh_token=refresh_token,
+
+         lwa_app_id=lwa_client_id,
+
+         lwa_client_secret=lwa_client_secret,
+
+         role_arn=role_arn,
+
+-        marketplace=mp
+
++        marketplace=mp,
+
+     )
+
+ 
+
+-def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
+
++
+
++log = logging.getLogger(__name__)
+
++
+
++
+
++def fetch_amazon_daily(account: dict, date: dt.date) -> dict[str, float]:
+
+     name = account["name"]
+
+     region = account["region"]
+
+     refresh_token = account["refresh_token"]
+
+@@ -45,15 +63,19 @@
+     key_sales = f"amazon_{name}_umsatz_brutto_eur"
+
+     key_returns = f"amazon_{name}_retouren_eur"
+
+ 
+
+-    out = {key_sales: "N/A", key_returns: "N/A"}
+
++    out: dict[str, float | str] = {key_sales: "N/A", key_returns: "N/A"}
+
+ 
+
+     # Sales via Orders API (OrderTotal)
+
+     try:
+
+-        orders_client = _orders_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
+
++        orders_client = _orders_client(
+
++            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
+
++        )
+
+         total_sales = 0.0
+
+         token = None
+
+         while True:
+
+-            resp = orders_client.get_orders(CreatedAfter=start, CreatedBefore=end, NextToken=token)
+
++            resp = orders_client.get_orders(
+
++                CreatedAfter=start, CreatedBefore=end, NextToken=token
+
++            )
+
+             for o in resp.payload.get("Orders", []):
+
+                 t = o.get("OrderTotal") or {}
+
+                 if t.get("CurrencyCode") == "EUR":
+
+@@ -62,12 +84,14 @@
+             if not token:
+
+                 break
+
+         out[key_sales] = round(total_sales, 2)
+
+-    except Exception:
+
+-        pass
+
++    except Exception as e:
+
++        log.exception("Amazon Orders fetch failed for %s: %s", name, e)
+
+ 
+
+     # Returns via Finances Refund Events (yesterday)
+
+     try:
+
+-        finances_client = _finances_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
+
++        finances_client = _finances_client(
+
++            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
+
++        )
+
+         total_refunds = 0.0
+
+         token = None
+
+         while True:
+
+@@ -79,13 +103,14 @@
+             for e in refund_events:
+
+                 charge = e.get("RefundChargeList") or []
+
+                 for c in charge:
+
+-                    if c.get("ChargeAmount", {}).get("CurrencyCode") == "EUR":
+
+-                        total_refunds += float(c.get("ChargeAmount", {}).get("CurrencyAmount") or 0.0)
+
++                    amount = c.get("ChargeAmount", {})
+
++                    if amount.get("CurrencyCode") == "EUR":
+
++                        total_refunds += float(amount.get("CurrencyAmount") or 0.0)
+
+             token = resp.payload.get("NextToken")
+
+             if not token:
+
+                 break
+
+         out[key_returns] = round(abs(total_refunds), 2)
+
+-    except Exception:
+
+-        pass
+
++    except Exception as e:
+
++        log.exception("Amazon Finances fetch failed for %s: %s", name, e)
+
+ 
+
+-    return out
+
++    return out  # type: ignore[return-value]
+
+--- a/src/fetchers/ebay.py
++++ b/src/fetchers/ebay.py
+@@ -1,37 +1,55 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+-import requests, datetime as dt, time
+
+-from typing import Dict
+
++import datetime as dt
+
++import time
+
++
+
++import requests
+
+ from tenacity import retry, stop_after_attempt, wait_exponential
+
+ 
+
+ ENV_URL = {
+
+     "production": "https://apiz.ebay.com",
+
+-    "sandbox": "https://api.sandbox.ebay.com"
+
++    "sandbox": "https://api.sandbox.ebay.com",
+
+ }
+
+ 
+
++
+
+ @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
+
+-def _refresh_access_token(base: str, app_id: str, cert_id: str, redirect_uri: str, refresh_token: str) -> str:
+
++def _refresh_access_token(
+
++    base: str,
+
++    app_id: str,
+
++    cert_id: str,
+
++    redirect_uri: str,
+
++    refresh_token: str,
+
++) -> str:
+
+     url = f"{base}/identity/v1/oauth2/token"
+
+     data = {
+
+-        "grant_type":"refresh_token",
+
++        "grant_type": "refresh_token",
+
+         "refresh_token": refresh_token,
+
+-        "scope": "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
+
++        "scope": "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+
+     }
+
+     r = requests.post(url, data=data, auth=(app_id, cert_id), timeout=30)
+
+     r.raise_for_status()
+
+     return r.json()["access_token"]
+
+ 
+
+-def fetch_ebay_daily(account: dict, date: dt.date) -> Dict[str, float]:
+
++
+
++def fetch_ebay_daily(account: dict, date: dt.date) -> dict[str, float]:
+
+     base = ENV_URL.get(account["environment"], ENV_URL["production"])
+
+-    access_token = _refresh_access_token(base, account["app_id"], account["cert_id"], account["redirect_uri"], account["refresh_token"])
+
++    access_token = _refresh_access_token(
+
++        base,
+
++        account["app_id"],
+
++        account["cert_id"],
+
++        account["redirect_uri"],
+
++        account["refresh_token"],
+
++    )
+
+     # get orders created yesterday, sum total
+
+     start = dt.datetime(date.year, date.month, date.day, 0, 0, 0).isoformat() + "Z"
+
+     end = (dt.datetime(date.year, date.month, date.day) + dt.timedelta(days=1)).isoformat() + "Z"
+
+     url = f"{base}/sell/fulfillment/v1/order"
+
+-    params = {
+
+-        "filter": f"creationdate:[{start}..{end})"
+
++    params = {"filter": f"creationdate:[{start}..{end})"}
+
++    headers = {
+
++        "Authorization": f"Bearer {access_token}",
+
++        "Content-Type": "application/json",
+
++        "Accept": "application/json",
+
+     }
+
+-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type":"application/json", "Accept":"application/json"}
+
+     total = 0.0
+
+     while True:
+
+         r = requests.get(url, headers=headers, params=params, timeout=30)
+
+@@ -41,9 +59,9 @@
+             t = o.get("pricingSummary", {}).get("total", {})
+
+             if t.get("currency") == "EUR":
+
+                 total += float(t.get("value") or 0.0)
+
+-        nxt = data.get("href") and data.get("next")
+
++        nxt = data.get("next")
+
+         if not nxt:
+
+             break
+
+         url = nxt
+
+         params = {}
+
+-    return { f"ebay_{account['name']}_umsatz_brutto_eur": round(total, 2) }
+
++    return {f"ebay_{account['name']}_umsatz_brutto_eur": round(total, 2)}
+
+--- a/src/sheets.py
++++ b/src/sheets.py
+@@ -1,15 +1,17 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+-import json, os, datetime as dt, re
+
++import json
+
++from typing import Any
+
++
+
+ import gspread
+
+ from google.oauth2.service_account import Credentials
+
+-from gspread_formatting import format_cell_range, CellFormat, Color
+
+-from typing import Dict, Any, List, Optional
+
++from gspread_formatting import CellFormat, Color, format_cell_range
+
+ 
+
+ SCOPE = [
+
+     "https://www.googleapis.com/auth/spreadsheets",
+
+-    "https://www.googleapis.com/auth/drive"
+
++    "https://www.googleapis.com/auth/drive",
+
+ ]
+
++
+
+ 
+
+ def _creds_from_env(service_account_json: str | None, service_account_file: str | None):
+
+     if service_account_json:
+
+@@ -19,9 +21,18 @@
+     if service_account_file:
+
+         creds = Credentials.from_service_account_file(service_account_file, scopes=SCOPE)
+
+         return creds
+
+-    raise RuntimeError("Google Service Account nicht konfiguriert. Setze GOOGLE_SERVICE_ACCOUNT_JSON oder GOOGLE_SERVICE_ACCOUNT_FILE.")
+
++    raise RuntimeError(
+
++        "Google Service Account nicht konfiguriert. "
+
++        "Setze GOOGLE_SERVICE_ACCOUNT_JSON oder GOOGLE_SERVICE_ACCOUNT_FILE."
+
++    )
+
+ 
+
+-def get_sheet(spreadsheet_id: str, worksheet_title: str, service_account_json: str | None, service_account_file: str | None):
+
++
+
++def get_sheet(
+
++    spreadsheet_id: str,
+
++    worksheet_title: str,
+
++    service_account_json: str | None,
+
++    service_account_file: str | None,
+
++):
+
+     creds = _creds_from_env(service_account_json, service_account_file)
+
+     gc = gspread.authorize(creds)
+
+     sh = gc.open_by_key(spreadsheet_id)
+
+@@ -31,7 +42,8 @@
+         ws = sh.add_worksheet(title=worksheet_title, rows=2000, cols=200)
+
+     return sh, ws
+
+ 
+
+-def ensure_headers(ws, headers: List[str]):
+
++
+
++def ensure_headers(ws, headers: list[str]):
+
+     existing = ws.row_values(1)
+
+     if existing == headers:
+
+         return
+
+@@ -41,14 +53,16 @@
+     # Freeze header row
+
+     ws.freeze(rows=1)
+
+ 
+
+-def find_row_by_date(ws, date_str: str) -> Optional[int]:
+
++
+
++def find_row_by_date(ws, date_str: str) -> int | None:
+
+     col1 = ws.col_values(1)
+
+     for i, v in enumerate(col1, start=1):
+
+         if v == date_str:
+
+             return i
+
+     return None
+
+ 
+
+-def write_row(ws, headers: List[str], date_str: str, row_data: Dict[str, Any]):
+
++
+
++def write_row(ws, headers: list[str], date_str: str, row_data: dict[str, Any]):
+
+     # Find or append row
+
+     row_idx = find_row_by_date(ws, date_str)
+
+     if row_idx is None:
+
+@@ -65,7 +79,8 @@
+         ws.update_cell(row_idx, col_idx, v if v is not None else "N/A")
+
+     return row_idx
+
+ 
+
+-def color_cell(ws, row: int, col: int, rgb: tuple | None):
+
++
+
++def color_cell(ws, row: int, col: int, rgb: tuple[float, float, float] | None):
+
+     if rgb is None:
+
+         return
+
+     cf = CellFormat(backgroundColor=Color(red=rgb[0], green=rgb[1], blue=rgb[2]))
+
+--- a/src/util/datewin.py
++++ b/src/util/datewin.py
+@@ -1,9 +1,9 @@
++from __future__ import annotations
+
+ 
+
+-from __future__ import annotations
+
+ import datetime as dt
+
+-from typing import Tuple
+
+ 
+
+-def berlin_bounds_for_date(d: dt.date) -> Tuple[dt.datetime, dt.datetime]:
+
++
+
++def berlin_bounds_for_date(d: dt.date) -> tuple[dt.datetime, dt.datetime]:
+
+     # midnight-to-midnight Europe/Berlin (naive, for APIs that take local or ISO strings)
+
+     start = dt.datetime(d.year, d.month, d.day, 0, 0, 0)
+
+     end = start + dt.timedelta(days=1)
+
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -5,8 +5,6 @@
+ [tool.ruff]
+
+ line-length = 100
+
+ target-version = "py312"
+
+-select = ["E","F","I","UP","B","N","S"]
+
+-ignore = []
+
+ exclude = ["venv",".venv","dist","build"]
+
+ 
+
+ [tool.isort]
+
+@@ -20,3 +18,7 @@
+ warn_no_return = true
+
+ strict_optional = true
+
+ ignore_missing_imports = true
+
++
+
++[tool.ruff.lint]
+
++select = ["E","F","I","UP","B","N","S"]
+
++ignore = []
+

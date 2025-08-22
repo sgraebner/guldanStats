@@ -1,0 +1,563 @@
+--- a/src/anomaly.py
++++ b/src/anomaly.py
+--- a/src/config.py
++++ b/src/config.py
+--- a/src/fetchers/amazon.py
++++ b/src/fetchers/amazon.py
+@@ -1,38 +1,56 @@
+ from __future__ import annotations
++
+ import datetime as dt
+-from typing import Dict, List
+-from sp_api.api import Orders, Finances
+-from sp_api.base import Marketplaces, SellingApiException
+-from tenacity import retry, stop_after_attempt, wait_exponential
+-from ..util.datewin import berlin_bounds_for_date
++import logging
++
++from sp_api.api import Finances, Orders
++from sp_api.base import Marketplaces
+ 
+ REGION_TO_MARKETPLACE = {
+     "eu": Marketplaces.DE,
+     "na": Marketplaces.US,
+-    "fe": Marketplaces.AU
++    "fe": Marketplaces.AU,
+ }
+ 
+-def _orders_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
++
++def _orders_client(
++    region: str,
++    refresh_token: str,
++    lwa_client_id: str,
++    lwa_client_secret: str,
++    role_arn: str,
++):
+     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
+     return Orders(
+         refresh_token=refresh_token,
+         lwa_app_id=lwa_client_id,
+         lwa_client_secret=lwa_client_secret,
+         role_arn=role_arn,
+-        marketplace=mp
++        marketplace=mp,
+     )
+ 
+-def _finances_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
++
++def _finances_client(
++    region: str,
++    refresh_token: str,
++    lwa_client_id: str,
++    lwa_client_secret: str,
++    role_arn: str,
++):
+     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
+     return Finances(
+         refresh_token=refresh_token,
+         lwa_app_id=lwa_client_id,
+         lwa_client_secret=lwa_client_secret,
+         role_arn=role_arn,
+-        marketplace=mp
++        marketplace=mp,
+     )
+ 
+-def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
++
++log = logging.getLogger(__name__)
++
++
++def fetch_amazon_daily(account: dict, date: dt.date) -> dict[str, float]:
+     name = account["name"]
+     region = account["region"]
+     refresh_token = account["refresh_token"]
+@@ -45,15 +63,19 @@
+     key_sales = f"amazon_{name}_umsatz_brutto_eur"
+     key_returns = f"amazon_{name}_retouren_eur"
+ 
+-    out = {key_sales: "N/A", key_returns: "N/A"}
++    out: dict[str, float | str] = {key_sales: "N/A", key_returns: "N/A"}
+ 
+     # Sales via Orders API (OrderTotal)
+     try:
+-        orders_client = _orders_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
++        orders_client = _orders_client(
++            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
++        )
+         total_sales = 0.0
+         token = None
+         while True:
+-            resp = orders_client.get_orders(CreatedAfter=start, CreatedBefore=end, NextToken=token)
++            resp = orders_client.get_orders(
++                CreatedAfter=start, CreatedBefore=end, NextToken=token
++            )
+             for o in resp.payload.get("Orders", []):
+                 t = o.get("OrderTotal") or {}
+                 if t.get("CurrencyCode") == "EUR":
+@@ -62,12 +84,14 @@
+             if not token:
+                 break
+         out[key_sales] = round(total_sales, 2)
+-    except Exception:
+-        pass
++    except Exception as e:
++        log.exception("Amazon Orders fetch failed for %s: %s", name, e)
+ 
+     # Returns via Finances Refund Events (yesterday)
+     try:
+-        finances_client = _finances_client(region, refresh_token, lwa_client_id, lwa_client_secret, role_arn)
++        finances_client = _finances_client(
++            region, refresh_token, lwa_client_id, lwa_client_secret, role_arn
++        )
+         total_refunds = 0.0
+         token = None
+         while True:
+@@ -79,13 +103,14 @@
+             for e in refund_events:
+                 charge = e.get("RefundChargeList") or []
+                 for c in charge:
+-                    if c.get("ChargeAmount", {}).get("CurrencyCode") == "EUR":
+-                        total_refunds += float(c.get("ChargeAmount", {}).get("CurrencyAmount") or 0.0)
++                    amount = c.get("ChargeAmount", {})
++                    if amount.get("CurrencyCode") == "EUR":
++                        total_refunds += float(amount.get("CurrencyAmount") or 0.0)
+             token = resp.payload.get("NextToken")
+             if not token:
+                 break
+         out[key_returns] = round(abs(total_refunds), 2)
+-    except Exception:
+-        pass
++    except Exception as e:
++        log.exception("Amazon Finances fetch failed for %s: %s", name, e)
+ 
+-    return out
++    return out  # type: ignore[return-value]
+--- a/src/fetchers/ebay.py
++++ b/src/fetchers/ebay.py
+@@ -1,7 +1,6 @@
+ from __future__ import annotations
+ 
+ import datetime as dt
+-import time
+ 
+ import requests
+ from tenacity import retry, stop_after_attempt, wait_exponential
+--- a/src/fetchers/getmyinvoices.py
++++ b/src/fetchers/getmyinvoices.py
+@@ -1,11 +1,12 @@
++from __future__ import annotations
+ 
+-from __future__ import annotations
+-import requests, datetime as dt
+-from typing import Dict, List
++import datetime as dt
++
++import requests
+ from tenacity import retry, stop_after_attempt, wait_exponential
+-from ..util.datewin import berlin_bounds_for_date
+ 
+ BASE_URL = "https://api.getmyinvoices.com/api/v2"
++
+ 
+ @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
+ def _get(path: str, api_key: str, params=None):
+@@ -14,19 +15,24 @@
+     r.raise_for_status()
+     return r.json()
+ 
+-def fetch_gmi_bank_balances_eod(api_key: str, date: dt.date) -> Dict[str, float]:
++
++def fetch_gmi_bank_balances_eod(api_key: str, date: dt.date) -> dict[str, float]:
+     # 1) list accounts
+     data = _get("/bank-accounts", api_key)
+     accounts = data.get("data") or []
+     # 2) for each account, get EoD balance for date
+-    out: Dict[str, float] = {}
++    out: dict[str, float | str] = {}
+     total = 0.0
+     for acc in accounts:
+         acc_id = acc.get("id")
+         name = acc.get("name") or acc.get("iban") or acc_id
+         # Hypothetical endpoint for balances history; adjust to actual GMI API if different.
+         try:
+-            bal = _get(f"/bank-accounts/{acc_id}/balances", api_key, params={"date": date.isoformat()})
++            bal = _get(
++                f"/bank-accounts/{acc_id}/balances",
++                api_key,
++                params={"date": date.isoformat()},
++            )
+             amount = float(bal.get("data", {}).get("amount"))
+             out[f"bank_{name}_kontostand_eur"] = round(amount, 2)
+             total += amount
+--- a/src/fetchers/google_ads.py
++++ b/src/fetchers/google_ads.py
+@@ -1,7 +1,7 @@
++from __future__ import annotations
+ 
+-from __future__ import annotations
+ import datetime as dt
+-from typing import Dict, List
++
+ from google.ads.googleads.client import GoogleAdsClient
+ 
+ GA_QUERY = '''
+@@ -12,6 +12,7 @@
+ FROM customer
+ WHERE segments.date BETWEEN '%(start)s' AND '%(end)s'
+ '''
++
+ 
+ def _client(dev_token, client_id, client_secret, refresh_token):
+     config = {
+@@ -24,9 +25,16 @@
+     }
+     return GoogleAdsClient.load_from_dict(config)
+ 
+-def fetch_google_ads_daily(dev_token: str, client_id: str, client_secret: str, refresh_token: str,
+-                           customer_ids: List[str], date: dt.date) -> Dict[str, float]:
+-    out: Dict[str, float] = {}
++
++def fetch_google_ads_daily(
++    dev_token: str,
++    client_id: str,
++    client_secret: str,
++    refresh_token: str,
++    customer_ids: list[str],
++    date: dt.date,
++) -> dict[str, float]:
++    out: dict[str, float | str] = {}
+     if not dev_token or not client_id or not client_secret or not refresh_token or not customer_ids:
+         return out
+     client = _client(dev_token, client_id, client_secret, refresh_token)
+--- a/src/fetchers/shopware6.py
++++ b/src/fetchers/shopware6.py
+@@ -1,9 +1,14 @@
++from __future__ import annotations
+ 
+-from __future__ import annotations
+-import requests, datetime as dt
+-from typing import Dict, List, Tuple, Optional
++import datetime as dt
++import logging
++from typing import Dict, List
++
++import requests
+ from tenacity import retry, stop_after_attempt, wait_exponential
++
+ from ..util.datewin import berlin_bounds_for_date
++
+ 
+ class Shopware6Client:
+     def __init__(self, name: str, base_url: str, client_id: str, client_secret: str):
+@@ -30,7 +35,7 @@
+         return {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
+ 
+     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+-    def list_sales_channels(self) -> List[Dict]:
++    def list_sales_channels(self) -> list[dict]:
+         url = f"{self.base_url}/api/sales-channel"
+         r = requests.get(url, headers=self._headers(), timeout=30)
+         r.raise_for_status()
+@@ -39,15 +44,18 @@
+     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+     def search_orders_sum(self, start_iso: str, end_iso: str, sales_channel_id: str) -> float:
+         url = f"{self.base_url}/api/search/order"
+-        # Sum of amountTotal (gross), orders created in [start,end)
+         payload = {
+             "filter": [
+-                {"type":"range","field":"orderDateTime","parameters":{"gte": start_iso, "lt": end_iso}},
+-                {"type":"equals","field":"salesChannelId","value": sales_channel_id}
++                {
++                    "type": "range",
++                    "field": "orderDateTime",
++                    "parameters": {"gte": start_iso, "lt": end_iso},
++                },
++                {"type": "equals", "field": "salesChannelId", "value": sales_channel_id},
+             ],
+             "associations": {},
+             "page": 1,
+-            "limit": 100
++            "limit": 100,
+         }
+         total = 0.0
+         while True:
+@@ -66,20 +74,21 @@
+ 
+     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+     def search_credit_notes_sum(self, start_iso: str, end_iso: str, sales_channel_id: str) -> float:
+-        # Approximation: sum of document type 'credit_note' created yesterday filtered by order's salesChannelId
+-        # We need to join via orderId; Shopware search API allows nested filter via associations isn't trivial.
+-        # Strategy: fetch relevant orders, then fetch documents per order.
+         url_orders = f"{self.base_url}/api/search/order"
+         payload = {
+             "filter": [
+-                {"type":"range","field":"orderDateTime","parameters":{"lt": end_iso}},  # include all up to end
+-                {"type":"equals","field":"salesChannelId","value": sales_channel_id}
++                {
++                    "type": "range",
++                    "field": "orderDateTime",
++                    "parameters": {"lt": end_iso},
++                },  # include all up to end
++                {"type": "equals", "field": "salesChannelId", "value": sales_channel_id},
+             ],
+             "associations": {},
+             "page": 1,
+-            "limit": 100
++            "limit": 100,
+         }
+-        order_ids: List[str] = []
++        order_ids: list[str] = []
+         while True:
+             r = requests.post(url_orders, headers=self._headers(), json=payload, timeout=45)
+             r.raise_for_status()
+@@ -96,20 +105,22 @@
+ 
+         total = 0.0
+         url_docs = f"{self.base_url}/api/search/document"
+-        # filter by createdAt in [start, end), by documentType.technicalName == 'credit_note' and orderId in order_ids
+-        # Shopware search supports "equalsAny" for ID arrays
+-        CHUNK = 100
+-        for i in range(0, len(order_ids), CHUNK):
+-            chunk = order_ids[i:i+CHUNK]
++        chunk_size = 100
++        for i in range(0, len(order_ids), chunk_size):
++            chunk = order_ids[i : i + chunk_size]
+             payload_docs = {
+                 "filter": [
+-                    {"type":"range","field":"createdAt","parameters":{"gte": start_iso, "lt": end_iso}},
+-                    {"type":"equals","field":"documentType.technicalName","value":"credit_note"},
+-                    {"type":"equalsAny","field":"orderId","value":"|".join(chunk)}
++                    {
++                        "type": "range",
++                        "field": "createdAt",
++                        "parameters": {"gte": start_iso, "lt": end_iso},
++                    },
++                    {"type": "equals", "field": "documentType.technicalName", "value": "credit_note"},
++                    {"type": "equalsAny", "field": "orderId", "value": "|".join(chunk)},
+                 ],
+                 "associations": {},
+                 "page": 1,
+-                "limit": 100
++                "limit": 100,
+             }
+             while True:
+                 r = requests.post(url_docs, headers=self._headers(), json=payload_docs, timeout=45)
+@@ -117,40 +128,14 @@
+                 data = r.json()
+                 elements = data.get("data", [])
+                 for d in elements:
+-                    # document totals are not standardized; fallback: try config or custom fields
+-                    # If unavailable, count each credit note as amountTotal from referenced order line items is non-trivial.
+-                    # Here we sum 'documentReferencing' amount when present in custom fields 'amountTotal'.
+                     attrs = d.get("attributes", {})
+                     custom = attrs.get("customFields") or {}
+                     val = custom.get("amountTotal") or custom.get("total") or 0.0
+                     try:
+                         total += float(val)
+-                    except:
+-                        pass
++                    except Exception as e:
++                        logging.getLogger(__name__).exception("Failed to accumulate credit note: %s", e)
+                 if len(elements) < payload_docs["limit"]:
+                     break
+                 payload_docs["page"] += 1
+         return total
+-
+-def fetch_shopware_daily(instance: Shopware6Client, date: dt.date) -> Dict[str, float]:
+-    start, end = berlin_bounds_for_date(date)
+-    start_iso = start.isoformat()
+-    end_iso = end.isoformat()
+-    out: Dict[str, float] = {}
+-    channels = instance.list_sales_channels()
+-    for ch in channels:
+-        ch_id = ch.get("id")
+-        ch_name = (ch.get("attributes", {}) or {}).get("name") or ch_id[:8]
+-        key_sales = f"shopware6_{instance.name}_{ch_name}_umsatz_brutto_eur"
+-        key_ret = f"shopware6_{instance.name}_{ch_name}_retouren_eur"
+-        try:
+-            sales = instance.search_orders_sum(start_iso, end_iso, ch_id)
+-        except Exception:
+-            sales = None
+-        try:
+-            returns = instance.search_credit_notes_sum(start_iso, end_iso, ch_id)
+-        except Exception:
+-            returns = None
+-        out[key_sales] = round(sales, 2) if sales is not None else "N/A"
+-        out[key_ret] = round(returns, 2) if returns is not None else "N/A"
+-    return out
+--- a/src/notify.py
++++ b/src/notify.py
+@@ -1,11 +1,20 @@
++from __future__ import annotations
+ 
+-from __future__ import annotations
+ import smtplib
+ from email.mime.text import MIMEText
+-from typing import Optional
+ 
+-def send_email(smtp_host: str, smtp_port: int, smtp_user: str | None, smtp_password: str | None, use_tls: bool,
+-               from_addr: str, to_addr: str, subject: str, body: str):
++
++def send_email(
++    smtp_host: str,
++    smtp_port: int,
++    smtp_user: str | None,
++    smtp_password: str | None,
++    use_tls: bool,
++    from_addr: str,
++    to_addr: str,
++    subject: str,
++    body: str,
++):
+     msg = MIMEText(body, _charset="utf-8")
+     msg["Subject"] = subject
+     msg["From"] = from_addr
+--- a/src/openai_notes.py
++++ b/src/openai_notes.py
+@@ -1,11 +1,16 @@
++from __future__ import annotations
+ 
+-from __future__ import annotations
+-from typing import List, Dict
++from typing import Dict, List
++
+ from openai import OpenAI
+ 
+-SYSTEM = "Du bist ein analytischer Assistent. Schreibe kurze, klare, deutschsprachige Stichpunkte zu betriebswirtschaftlichen Auffälligkeiten."
++SYSTEM = (
++    "Du bist ein analytischer Assistent. "
++    "Schreibe kurze, klare, deutschsprachige Stichpunkte zu betriebswirtschaftlichen Auffälligkeiten."
++)
+ 
+-def write_notes(api_key: str, model: str, date_str: str, anomalies: List[Dict]) -> str:
++
++def write_notes(api_key: str, model: str, date_str: str, anomalies: list[dict]) -> str:
+     if not anomalies:
+         return ""
+     client = OpenAI(api_key=api_key)
+@@ -15,19 +20,23 @@
+         value = a.get("value")
+         direction = "deutlich höher" if a.get("flag") == "green" else "deutlich niedriger"
+         norm = a.get("norm")
+-        bullet_points.append(f"- {metric}: {direction} als üblich (Wert {value:.2f} €, Norm {norm:.2f} €).")
++        bullet_points.append(
++            f"- {metric}: {direction} als üblich "
++            f"(Wert {value:.2f} €, Norm {norm:.2f} €)."
++        )
+     user = (
+         f"Datum: {date_str}\n"
+-        f"Formuliere 1–3 prägnante Stichpunkte zu folgenden Auffälligkeiten (kein Smalltalk, kein Disclaimer):\n"
++        "Formuliere 1–3 prägnante Stichpunkte zu folgenden Auffälligkeiten "
++        "(kein Smalltalk, kein Disclaimer):\n"
+         + "\n".join(bullet_points)
+     )
+     resp = client.chat.completions.create(
+         model=model,
+         messages=[
+-            { "role": "system", "content": SYSTEM },
+-            { "role": "user", "content": user }
++            {"role": "system", "content": SYSTEM},
++            {"role": "user", "content": user},
+         ],
+         temperature=0.2,
+-        max_tokens=150
++        max_tokens=150,
+     )
+     return resp.choices[0].message.content.strip()
+--- a/src/main.py
++++ b/src/main.py
+@@ -123,8 +123,8 @@
+     try:
+         import time
+         time.tzset()
+-    except Exception:
+-        pass
++    except Exception as e:
++        log.debug("tzset not available or failed: %s", e)
+ 
+     sh, ws = get_sheet(settings.GOOGLE_SPREADSHEET_ID, settings.GOOGLE_SHEET_TAB, settings.GOOGLE_SERVICE_ACCOUNT_JSON, settings.GOOGLE_SERVICE_ACCOUNT_FILE)
+     # Determine date(s) to process: backfill if missing
+@@ -164,15 +164,14 @@
+                 val = float(v)
+             except:
+                 val = None
+-            hist = compute_history(ws, headers, k)[:-1]  # exclude the just-written value (we'll use prior history)
++            # exclude the just-written value (we'll use prior history)
++            hist = compute_history(ws, headers, k)[:-1]
+             flag, norm = classify(val, [x for x in hist])
+             if flag != "none" and norm is not None:
+                 col_idx = headers.index(k) + 1
+                 # Color the cell now
+                 if flag == "green":
+                     # green
+-                    from gspread_formatting import Color
+-                    from .sheets import color_cell
+                     color_cell(ws, row_index, col_idx, (0.8, 0.94, 0.8))
+                 elif flag == "red":
+                     color_cell(ws, row_index, col_idx, (0.98, 0.8, 0.8))
+@@ -182,7 +181,12 @@
+         note_text = ""
+         if flagged:
+             try:
+-                note_text = write_notes(settings.OPENAI_API_KEY, settings.OPENAI_MODEL, date_str, flagged)
++                note_text = write_notes(
++                    settings.OPENAI_API_KEY,
++                    settings.OPENAI_MODEL,
++                    date_str,
++                    flagged,
++                )
+                 ws.update_cell(row_index, headers.index("notizen")+1, note_text)
+             except Exception as e:
+                 log.exception("OpenAI notes failed: %s", e)
+@@ -200,11 +204,15 @@
+                     body_lines.append(note)
+             if body_lines:
+                 send_email(
+-                    smtp_host=settings.SMTP_HOST, smtp_port=settings.SMTP_PORT,
+-                    smtp_user=settings.SMTP_USER, smtp_password=settings.SMTP_PASSWORD, use_tls=settings.SMTP_USE_TLS,
+-                    from_addr=settings.ALERT_EMAIL_FROM, to_addr=settings.ALERT_EMAIL_TO,
++                    smtp_host=settings.SMTP_HOST,
++                    smtp_port=settings.SMTP_PORT,
++                    smtp_user=settings.SMTP_USER,
++                    smtp_password=settings.SMTP_PASSWORD,
++                    use_tls=settings.SMTP_USE_TLS,
++                    from_addr=settings.ALERT_EMAIL_FROM,
++                    to_addr=settings.ALERT_EMAIL_TO,
+                     subject="KPI-Harvester: Auffälligkeiten erkannt",
+-                    body="\n".join(body_lines)
++                    body="\n".join(body_lines),
+                 )
+         except Exception as e:
+             log.exception("Email alert failed: %s", e)
+@@ -216,14 +224,19 @@
+     try:
+         import time
+         time.tzset()
+-    except Exception:
+-        pass
++    except Exception as e:
++        log.debug("tzset not available or failed: %s", e)
+ 
+     scheduler = BackgroundScheduler(timezone=settings.TZ)
+     trigger = CronTrigger(hour=settings.RUN_HOUR, minute=settings.RUN_MINUTE)
+     scheduler.add_job(job_run, trigger)
+     scheduler.start()
+-    log.info("KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s", settings.RUN_HOUR, settings.RUN_MINUTE, settings.TZ)
++    log.info(
++        "KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s",
++        settings.RUN_HOUR,
++        settings.RUN_MINUTE,
++        settings.TZ,
++    )
+     try:
+         while True:
+             time.sleep(3600)
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -20,5 +20,3 @@
+ ignore_missing_imports = true
+ 
+ [tool.ruff.lint]
+-select = ["E","F","I","UP","B","N","S"]
+-ignore = []
