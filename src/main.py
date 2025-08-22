@@ -1,8 +1,9 @@
 
 from __future__ import annotations
-import os, json, time, datetime as dt, traceback, logging
+import os
+import datetime as dt
 from dotenv import load_dotenv
-from tzlocal import get_localzone
+from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -47,7 +48,12 @@ def enumerate_dynamic_keys(settings: Settings) -> dict:
     dummy["bank_gesamt_kontostand_eur"] = ""
     return dummy
 
-def fetch_all_for_date(settings: Settings, target_date: dt.date, sh, ws) -> tuple[dict, list[tuple[str,int,int]]]:
+def fetch_all_for_date(
+    settings: Settings,
+    target_date: dt.date,
+    sh,
+    ws,
+) -> tuple[dict, list[tuple[str, int, int]]]:
     # returns row data dict and list of (column_key, row_idx, col_idx) for coloring after anomaly
     # 1) Shopware
     row: dict = {}
@@ -71,7 +77,13 @@ def fetch_all_for_date(settings: Settings, target_date: dt.date, sh, ws) -> tupl
 
     # 3) Google Ads
     try:
-        if settings.GOOGLE_ADS_DEVELOPER_TOKEN and settings.GOOGLE_ADS_CLIENT_ID and settings.GOOGLE_ADS_CLIENT_SECRET and settings.GOOGLE_ADS_REFRESH_TOKEN and settings.GOOGLE_ADS_CUSTOMER_IDS:
+        if (
+            settings.GOOGLE_ADS_DEVELOPER_TOKEN
+            and settings.GOOGLE_ADS_CLIENT_ID
+            and settings.GOOGLE_ADS_CLIENT_SECRET
+            and settings.GOOGLE_ADS_REFRESH_TOKEN
+            and settings.GOOGLE_ADS_CUSTOMER_IDS
+        ):
             ga = fetch_google_ads_daily(
                 settings.GOOGLE_ADS_DEVELOPER_TOKEN,
                 settings.GOOGLE_ADS_CLIENT_ID,
@@ -104,14 +116,14 @@ def fetch_all_for_date(settings: Settings, target_date: dt.date, sh, ws) -> tupl
 
 def compute_history(ws, headers, col_key) -> list[float]:
     # read entire column (excluding header), parse to floats ignoring N/A
-    import gspread
     col_idx = headers.index(col_key) + 1
     values = ws.col_values(col_idx)[1:]  # skip header
     hist = []
     for v in values:
         try:
             x = float(v)
-        except:
+        except Exception:
+
             x = None
         hist.append(x)
     return hist
@@ -123,10 +135,15 @@ def job_run():
     try:
         import time
         time.tzset()
-    except Exception as e:
-        log.debug("tzset not available or failed: %s", e)
+    except Exception:
+        pass
 
-    sh, ws = get_sheet(settings.GOOGLE_SPREADSHEET_ID, settings.GOOGLE_SHEET_TAB, settings.GOOGLE_SERVICE_ACCOUNT_JSON, settings.GOOGLE_SERVICE_ACCOUNT_FILE)
+    sh, ws = get_sheet(
+        settings.GOOGLE_SPREADSHEET_ID,
+        settings.GOOGLE_SHEET_TAB,
+        settings.GOOGLE_SERVICE_ACCOUNT_JSON,
+        settings.GOOGLE_SERVICE_ACCOUNT_FILE,
+    )
     # Determine date(s) to process: backfill if missing
     today = dt.datetime.now().date()
     # Yesterday range or backfill logic
@@ -162,16 +179,18 @@ def job_run():
                 continue
             try:
                 val = float(v)
-            except:
+        except Exception:
+
                 val = None
-            # exclude the just-written value (we'll use prior history)
-            hist = compute_history(ws, headers, k)[:-1]
+            hist = compute_history(ws, headers, k)[:-1]  # exclude the just-written value (we'll use prior history)
             flag, norm = classify(val, [x for x in hist])
             if flag != "none" and norm is not None:
                 col_idx = headers.index(k) + 1
                 # Color the cell now
                 if flag == "green":
                     # green
+                    from gspread_formatting import Color
+                    from .sheets import color_cell
                     color_cell(ws, row_index, col_idx, (0.8, 0.94, 0.8))
                 elif flag == "red":
                     color_cell(ws, row_index, col_idx, (0.98, 0.8, 0.8))
@@ -181,12 +200,7 @@ def job_run():
         note_text = ""
         if flagged:
             try:
-                note_text = write_notes(
-                    settings.OPENAI_API_KEY,
-                    settings.OPENAI_MODEL,
-                    date_str,
-                    flagged,
-                )
+                note_text = write_notes(settings.OPENAI_API_KEY, settings.OPENAI_MODEL, date_str, flagged)
                 ws.update_cell(row_index, headers.index("notizen")+1, note_text)
             except Exception as e:
                 log.exception("OpenAI notes failed: %s", e)
@@ -204,15 +218,11 @@ def job_run():
                     body_lines.append(note)
             if body_lines:
                 send_email(
-                    smtp_host=settings.SMTP_HOST,
-                    smtp_port=settings.SMTP_PORT,
-                    smtp_user=settings.SMTP_USER,
-                    smtp_password=settings.SMTP_PASSWORD,
-                    use_tls=settings.SMTP_USE_TLS,
-                    from_addr=settings.ALERT_EMAIL_FROM,
-                    to_addr=settings.ALERT_EMAIL_TO,
+                    smtp_host=settings.SMTP_HOST, smtp_port=settings.SMTP_PORT,
+                    smtp_user=settings.SMTP_USER, smtp_password=settings.SMTP_PASSWORD, use_tls=settings.SMTP_USE_TLS,
+                    from_addr=settings.ALERT_EMAIL_FROM, to_addr=settings.ALERT_EMAIL_TO,
                     subject="KPI-Harvester: Auffälligkeiten erkannt",
-                    body="\n".join(body_lines),
+                    body="\n".join(body_lines)
                 )
         except Exception as e:
             log.exception("Email alert failed: %s", e)
@@ -224,19 +234,14 @@ def run_forever():
     try:
         import time
         time.tzset()
-    except Exception as e:
-        log.debug("tzset not available or failed: %s", e)
+    except Exception:
+        pass
 
     scheduler = BackgroundScheduler(timezone=settings.TZ)
     trigger = CronTrigger(hour=settings.RUN_HOUR, minute=settings.RUN_MINUTE)
     scheduler.add_job(job_run, trigger)
     scheduler.start()
-    log.info(
-        "KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s",
-        settings.RUN_HOUR,
-        settings.RUN_MINUTE,
-        settings.TZ,
-    )
+    log.info("KPI Harvester gestartet. Geplante Uhrzeit: %02d:%02d %s", settings.RUN_HOUR, settings.RUN_MINUTE, settings.TZ)
     try:
         while True:
             time.sleep(3600)

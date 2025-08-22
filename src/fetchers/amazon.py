@@ -1,38 +1,56 @@
-
 from __future__ import annotations
+
 import datetime as dt
-from typing import Dict, List
-from sp_api.api import Orders, Finances
-from sp_api.base import Marketplaces, SellingApiException
-from tenacity import retry, stop_after_attempt, wait_exponential
+import logging
+
+from sp_api.api import Finances, Orders
+from sp_api.base import Marketplaces
 
 REGION_TO_MARKETPLACE = {
     "eu": Marketplaces.DE,
     "na": Marketplaces.US,
-    "fe": Marketplaces.AU
+    "fe": Marketplaces.AU,
 }
 
-def _orders_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
+
+def _orders_client(
+    region: str,
+    refresh_token: str,
+    lwa_client_id: str,
+    lwa_client_secret: str,
+    role_arn: str,
+):
     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
     return Orders(
         refresh_token=refresh_token,
         lwa_app_id=lwa_client_id,
         lwa_client_secret=lwa_client_secret,
         role_arn=role_arn,
-        marketplace=mp
+        marketplace=mp,
     )
 
-def _finances_client(region: str, refresh_token: str, lwa_client_id: str, lwa_client_secret: str, role_arn: str):
+
+def _finances_client(
+    region: str,
+    refresh_token: str,
+    lwa_client_id: str,
+    lwa_client_secret: str,
+    role_arn: str,
+):
     mp = REGION_TO_MARKETPLACE.get(region, Marketplaces.DE)
     return Finances(
         refresh_token=refresh_token,
         lwa_app_id=lwa_client_id,
         lwa_client_secret=lwa_client_secret,
         role_arn=role_arn,
-        marketplace=mp
+        marketplace=mp,
     )
 
-def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
+
+log = logging.getLogger(__name__)
+
+
+def fetch_amazon_daily(account: dict, date: dt.date) -> dict[str, float]:
     name = account["name"]
     region = account["region"]
     refresh_token = account["refresh_token"]
@@ -95,4 +113,4 @@ def fetch_amazon_daily(account: dict, date: dt.date) -> Dict[str, float]:
     except Exception as e:
         log.exception("Amazon Finances fetch failed for %s: %s", name, e)
 
-    return out  # type: ignore[return-value]
+    return out

@@ -1,6 +1,0 @@
-@@ -20,5 +20,3 @@
- ignore_missing_imports = true
- 
- [tool.ruff.lint]
--select = ["E","F","I","UP","B","N","S"]
--ignore = []
