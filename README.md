@@ -1,5 +1,5 @@
 
-# Harvester – Tägliche Kennzahlen nach Google Sheets
+# KPI Harvester – Tägliche Kennzahlen nach Google Sheets
 
 Ein produktionsreifes, echtwelt-taugliches Python-Projekt, das täglich (über **Supervisor**) Daten abruft und in eine **Google Sheets**-Tabelle schreibt. Das Skript analysiert Abweichungen, markiert auffällige Werte farblich (grün bei > +35% über Norm, rot bei < −35% unter Norm) und verfasst deutschsprachige Kurznotizen mit **OpenAI (gpt-5-nano)**. Fehler und Auffälligkeiten können per E‑Mail gemeldet werden.
 

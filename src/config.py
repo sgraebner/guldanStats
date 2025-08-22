@@ -33,6 +33,17 @@ class EbayAccount(BaseSettings):
     refresh_token: str
 
 
+
+class TikTokShop(BaseSettings):
+    name: str
+    base_url: str = "https://open-api.tiktokglobalshop.com"
+    app_key: str
+    app_secret: str
+    shop_id: str | None = None
+    seller_id: str | None = None
+    access_token: str
+    refresh_token: str
+
 class Settings(BaseSettings):
     ENV: str = "production"
     TZ: str = "Europe/Berlin"
@@ -70,6 +81,8 @@ class Settings(BaseSettings):
 
     EBAY_ACCOUNTS: list[EbayAccount] = Field(default_factory=list)
 
+    TIKTOK_SHOPS: list[TikTokShop] = Field(default_factory=list)
+
     @field_validator("SHOPWARE6_INSTANCES", mode="before")
     @classmethod
     def parse_sw6(cls, v: Any):
@@ -95,3 +108,11 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+
+
+@field_validator("TIKTOK_SHOPS", mode="before")
+@classmethod
+def parse_tiktok(cls, v: Any):
+    if isinstance(v, str):
+        return json.loads(v)
+    return v

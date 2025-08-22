@@ -19,6 +19,7 @@ from .fetchers.getmyinvoices import fetch_gmi_bank_balances_eod
 from .fetchers.google_ads import fetch_google_ads_daily
 from .fetchers.amazon import fetch_amazon_daily
 from .fetchers.ebay import fetch_ebay_daily
+from .fetchers.tiktok_shop import fetch_tiktok_daily
 
 log = setup_logger()
 
