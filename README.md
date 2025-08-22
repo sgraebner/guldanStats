@@ -8,6 +8,7 @@ Ein produktionsreifes, echtwelt-taugliches Python-Projekt, das täglich (über *
 - **GetMyInvoices**: **Kontostände** gestern EoD je Bankkonto + Gesamtsumme
 - **Google Ads**: **Ausgaben** & **Umsatz (Conversion Value)** je Konto
 - **Amazon Seller Central (SP‑API)**: **Umsatz brutto** (Bestellungen gestern) & **Retouren** (Finances Refund Events) je **Region**
+- **TikTok Shop**: **Umsatz** (Bestellungen gestern) je Account
 - **eBay**: **Umsatz** (Bestellungen gestern) je Account (**Retouren übersprungen**)
 
 ## Tabellenlayout (Deutsch)
