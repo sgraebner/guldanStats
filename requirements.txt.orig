@@ -22,7 +22,7 @@ openai==1.42.0
 google-ads==25.1.0
 
 # Amazon SP-API
-python-amazon-sp-api==1.9.46
+amazon-sp-api==0.19.7
 
 # eBay - wir nutzen REST via requests (kein extra SDK nötig)
 
