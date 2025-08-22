@@ -1,0 +1,28 @@
+
+# Core
+python-dotenv==1.0.1
+pydantic==2.8.2
+pydantic-settings==2.4.0
+requests==2.32.3
+tenacity==9.0.0
+pandas==2.2.2
+numpy==2.0.1
+APScheduler==3.10.4
+tzlocal==5.2
+
+# Google Sheets
+gspread==6.0.2
+google-auth==2.33.0
+gspread-formatting==1.2.0
+
+# OpenAI
+openai==1.42.0
+
+# Google Ads
+google-ads==25.1.0
+
+# Amazon SP-API
+amazon-sp-api==0.19.7
+
+# eBay - wir nutzen REST via requests (kein extra SDK nötig)
+
